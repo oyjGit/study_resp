@@ -63,16 +63,17 @@ static int base64_decode(char* src, int len, char* dst)
     return size;
 }
 
-static int aes128_encode(AES_KEY* key, char* src, int len, char* dst)
+static int aes_ecb_128_encode(AES_KEY* key, char* src, int len, char* dst)
 {
 	if(NULL == key || NULL == src || NULL == dst)
 		return -1;
 	//src,dst必须是16个字节长度
+	//AES_encrypt为ecb模式加密,ecb模式明文相同，加密后的密文也相同
 	AES_encrypt(src, dst, key);
 	return 0;
 }
 
-static int aes128_deccode(AES_KEY* key, char* src, int len, char* dst)
+static int aes_ecb_128_deccode(AES_KEY* key, char* src, int len, char* dst)
 {
 	if(NULL == key || NULL == src || NULL == dst)
 		return -1;
@@ -107,14 +108,154 @@ static void test_aes128()
 	aes128data[10] = 'k';
 	int ret = AES_set_encrypt_key(key, 128, &aes128enckey);
 	fprintf(stderr, "set encode key ret=%d\n", ret);
-	ret = aes128_encode(&aes128enckey, aes128data, 16, aes128out);
-	//fprintf(stderr, "aes128 encode ret=%d, data=%s\n", ret, aes128out);
+	ret = aes_ecb_128_encode(&aes128enckey, aes128data, 16, aes128out);
+	fprintf(stderr, "aes128 encode ret=%d, data=%s\n", ret, aes128out);
 	ret = AES_set_decrypt_key(key, 128, &aes128deckey);
-	ret = aes128_deccode(&aes128deckey, aes128out, 16, aes128decout);
-	//fprintf(stderr, "aes128 decode ret=%d, data=%s\n", ret, aes128decout);
+	ret = aes_ecb_128_deccode(&aes128deckey, aes128out, 16, aes128decout);
+	fprintf(stderr, "aes128 decode ret=%d, data=%s\n", ret, aes128decout);
 	ret = memcmp(aes128data, aes128decout, 16);
 	fprintf(stderr, "cmp decode encode ret=%d\n", ret);
 }
+
+//ecb 和 cbc模式需要填充16字节对齐
+//cfb 和 ofb模式不需要填充
+static void aes_ecb_Enc(char* data, int dataLen)
+{
+	AES_KEY aes128enckey;
+	char key[] = { "abcdefghijklmnop" };
+	int exactLen = dataLen;
+	if (dataLen % AES_BLOCK_SIZE != 0) 
+	{
+		fprintf(stderr, "data len not equals 16bei %d\n", dataLen);
+		exactLen = (dataLen / AES_BLOCK_SIZE + 1) * AES_BLOCK_SIZE;
+	}
+	char* dst = (char*)malloc(exactLen);
+	int left = dataLen;
+	memset(dst, 0, exactLen);
+	char* ptr = dst;
+	char space[AES_BLOCK_SIZE] = {0};
+	int ret = AES_set_encrypt_key(key, 128, &aes128enckey);
+	for (int i = 0; i < exactLen / AES_BLOCK_SIZE; i++)
+	{
+		ptr = data + (i*AES_BLOCK_SIZE);
+		if (left < AES_BLOCK_SIZE) 
+		{
+			memcpy(space, ptr, left);
+			ptr = space;
+			fprintf(stderr, "left data %d\n", left);
+		}
+		ret = aes_ecb_128_encode(&aes128enckey, ptr, AES_BLOCK_SIZE, dst + (i*AES_BLOCK_SIZE));
+		left -= AES_BLOCK_SIZE;
+	}
+	char base64[4096] = {0};
+	base64_encode(dst, exactLen, base64);
+	fprintf(stderr, "aes128 encode ret=%d, base64=%s\n", ret,  base64);
+}
+
+static void aes_ecb_Dec(char* data, int dataLen)
+{
+	fprintf(stderr, "got to decode data len=%d\n", dataLen);
+	AES_KEY aes128deckey;
+	char key[] = {"abcdefghijklmnop"};
+	int ret = AES_set_decrypt_key(key, 128, &aes128deckey);
+	int exactLen = dataLen;
+	char* dst = (char*)malloc(exactLen);
+	memset(dst, 0, exactLen);
+	for (int i = 0; i < exactLen / AES_BLOCK_SIZE; i++)
+	{
+		ret = aes_ecb_128_deccode(&aes128deckey, data + (i*AES_BLOCK_SIZE), AES_BLOCK_SIZE, dst + (i*AES_BLOCK_SIZE));
+	}
+	fprintf(stderr, "aes128 dec len=%d, base64=%s\n", strlen(dst), dst);
+}
+
+
+static void aes_cbc_Enc(char* data)
+{
+	AES_KEY aes128enckey;
+	char key[] = { "abcdefghijklmnop" };
+	//加密和解密需要一致
+	char iv[] = { "ivopt61234567890" };
+	char aes128out[1024] = { 0 };
+	memset(aes128out, 0, 128);
+	int ret = AES_set_encrypt_key(key, 128, &aes128enckey);
+	fprintf(stderr, "set encode key ret=%d\n", ret);
+	//如果要加密明文不足16个字节，内部会填充16字节
+	 AES_cbc_encrypt(data, aes128out, strlen(data), &aes128enckey, iv, AES_ENCRYPT);
+	int len = 0;
+	for (int i = 0; i < 1024; i++)
+	{
+		if (aes128out[i] != 0)
+		{
+			len++;
+		}
+	}
+	char base64[4096] = { 0 };
+	base64_encode(aes128out, len, base64);
+	fprintf(stderr, "aes128 encode ret=%d, len=%d,base64=%s\n", ret, len, base64);
+}
+
+static void aes_cbc_Dec(char* data)
+{
+	AES_KEY aes128deckey;
+	char key[] = { "abcdefghijklmnop" };
+	char iv[] = { "ivopt61234567890" };
+	char aes128decout[1024] = { 0 };
+	int ret = AES_set_decrypt_key(key, 128, &aes128deckey);
+	AES_cbc_encrypt(data, aes128decout, strlen(data), &aes128deckey, iv, AES_DECRYPT);
+	int len = 0;
+	int i = 0;
+	for (; i < 1024; i++)
+	{
+		if (aes128decout[i] != 0)
+		{
+			len++;
+		}
+	}
+	fprintf(stderr, "aes128 decode ret=%d,  len=%d, i=%d, data=%s\n", ret, len, i, aes128decout);
+}
+
+//void AES_cfb128_encrypt(const unsigned char *in, unsigned char *out,
+//	size_t length, const AES_KEY *key,
+//	unsigned char *ivec, int *num, const int enc);
+//AES CFB128位模式加密 / 解密。输入输出数据区能够重叠。
+//in： 须要加密 / 解密的数据。
+//out： 计算后输出的数据；
+//length： 数据长度；
+//key： 密钥；
+//ivec： 初始化向量
+//num： 输出參数。计算状态。多少个CFB数据块
+//enc： 计算模式。 加密： AES_ENCRYPT 。 解密： AES_DECRYPT
+
+static void aes_cfb_Enc(char* data, int dataLen)
+{
+	fprintf(stderr, "got data len = %d\n", dataLen);
+	AES_KEY aes128enckey;
+	char key[] = { "abcdefghijklmnop" };
+	char iv[] = { "abcdefghijklmnop" };
+	int ret = AES_set_encrypt_key(key, 128, &aes128enckey);
+	char* dst = (char*)malloc(dataLen+1);
+	int num = 0;
+	AES_cfb128_encrypt(data, dst, dataLen, &aes128enckey, iv, &num, AES_ENCRYPT);
+	char base64[4096] = { 0 };
+	base64_encode(dst, dataLen, base64);
+	fprintf(stderr, "cfb 128 encode num=%d, base64=%s\n", num, base64);
+}
+
+static void aes_cfb_Dec(char* data, int dataLen)
+{
+	fprintf(stderr, "got data len = %d\n", dataLen);
+	AES_KEY aes128deckey;
+	char key[] = { "abcdefghijklmnop" };
+	char iv[] = { "abcdefghijklmnop" };
+	//cfb模式解密的时候需要调用AES_set_encrypt_key设置key
+	//注意:CFB、OFB和CTR模式中解密也都是用的加密器而非解密器
+	int ret = AES_set_encrypt_key(key, 128, &aes128deckey);
+	char* dst = (char*)malloc(dataLen+1);
+	int num = 0;
+	AES_cfb128_encrypt(data, dst, dataLen, &aes128deckey, iv, &num, AES_DECRYPT);
+	fprintf(stderr, "cfb 128 decode num=%d, data=%s\n", num, dst);
+}
+
 
 static void test(int argc, char** argv)
 {
@@ -208,24 +349,99 @@ static void test(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
-	
-	test(argc, argv);
-	return 0;
-	
-	int count = 400;
-	h264Helper helper;
-	long long t_start, t_end;
-	if(argc < 2)
+	for (int i = 0; i < argc; i++) {
+		fprintf(stderr, "i:%d,%s\n", i, argv[i]);
+	}
+	if (argc < 4) 
 	{
-		fprintf(stderr, "usage:%s filename\n", argv[0]);
+		fprintf(stderr, "usage:%s, <type> <codec> <content>\n");
 		return 0;
 	}
+	if (strcmp(argv[1], "ecb") == 0) 
+	{
+		if (strcmp(argv[2], "e") == 0)
+		{
+			fprintf(stderr, "%s\n", "encode");
+			aes_ecb_Enc(argv[3], strlen(argv[3]));
+		}
+		else if (strcmp(argv[2], "d") == 0)
+		{
+			fprintf(stderr, "%s\n", "decode");
+			char debase64[4096] = { 0 };
+			int len = base64_decode(argv[3], strlen(argv[3]), debase64);
+			aes_ecb_Dec(debase64, len);
+		}
+		else
+		{
+			fprintf(stderr, "%s\n", "not support");
+		}
+		return 0;
+	}
+	else if (strcmp(argv[1], "cbc") == 0) 
+	{
+		if (strcmp(argv[2], "e") == 0)
+		{
+			fprintf(stderr, "%s\n", "encode");
+			aes_cbc_Enc(argv[3]);
+		}
+		else if (strcmp(argv[2], "d") == 0)
+		{
+			fprintf(stderr, "%s\n", "decode");
+			char debase64[4096] = { 0 };
+			int len = base64_decode(argv[3], strlen(argv[3]), debase64);
+			aes_cbc_Dec(debase64);
+		}
+		else
+		{
+			fprintf(stderr, "%s\n", "not support");
+		}
+		return 0;
+	}
+	else if (strcmp(argv[1], "cfb") == 0)
+	{
+		if (strcmp(argv[2], "e") == 0)
+		{
+			fprintf(stderr, "%s\n", "encode");
+			aes_cfb_Enc(argv[3], strlen(argv[3]));
+		}
+		else if (strcmp(argv[2], "d") == 0)
+		{
+			fprintf(stderr, "%s\n", "decode");
+			char debase64[4096] = { 0 };
+			int len = base64_decode(argv[3], strlen(argv[3]), debase64);
+			fprintf(stderr, "got msg len info:%d\n", len);
+			aes_cfb_Dec(debase64, len);
+		}
+		else
+		{
+			fprintf(stderr, "%s\n", "not support");
+		}
+		return 0;
+	}
+	else if (strcmp(argv[1], "ofb") == 0) {
+
+	}
+	return 0;
+	
+	
+
+	test(argc, argv);
 	
 	test_base64();
 	fprintf(stderr, "\n=====================================================================================================%s\n", "=");
 	test_aes128();
 	fprintf(stderr, "\n=====================================================================================================%s\n", "=");
 	
+
+#if 0
+	int count = 400;
+	h264Helper helper;
+	long long t_start, t_end;
+	if (argc < 2)
+	{
+		fprintf(stderr, "usage:%s filename\n", argv[0]);
+		return 0;
+	}
 	char* encodeName = "./encode.h264";
 	
 	FILE* file = fopen(encodeName, "wb");
@@ -320,6 +536,6 @@ int main(int argc, char** argv)
 		fprintf(stderr, "init2 h264 helper failed, ret=%d\n", ret);
 	}
 	h264HelperFree(&helper);
-	
+#endif
 	return 0;
 }
