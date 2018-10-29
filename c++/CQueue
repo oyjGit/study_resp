@@ -1,0 +1,117 @@
+#ifndef __MEDIAQUEUE_H__
+#define __MEDIAQUEUE_H__
+
+#include <memory>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+
+template<typename T>
+class CQueue
+{
+public:
+	CQueue() {};
+	~CQueue() 
+	{
+		clear();
+	};
+	CQueue(const CQueue& ins) = delete;
+
+	int pushElement(const T& item) 
+	{
+		std::unique_lock<std::mutex> lock(mLock);
+		mQue.push_back(item);
+		mCond.notify_one();
+		return 0;
+	}
+	
+	T& popElement() 
+	{
+		std::unique_lock<std::mutex> lock(mLock);
+		while (mQue.empty())
+		{
+			mCond.wait(lock);
+		}
+		T item = mQue.front();
+		mQue.pop_front();
+		return item;
+	}
+
+	T tryPopElement()
+	{
+		std::unique_lock<std::mutex> lock(mLock);
+		while (mQue.empty())
+		{
+			return nullptr;
+		}
+		T item = mQue.front();
+		mQue.pop_front();
+		return item;
+	}
+	
+	T  popElementTimeOut(size_t timeOut) 
+	{
+		std::unique_lock<std::mutex> lock(mLock);
+		std::cv_status status = std::cv_status::no_timeout;
+		while (mQue.empty())
+		{
+			status = mCond.wait_for(lock, std::chrono::milliseconds(timeOut));
+			if (std::cv_status::timeout == status)
+			{
+				return nullptr;
+			}
+			if (mQue.empty())
+			{
+				return nullptr;
+			}
+		}
+		T front = mQue.front();
+		mQue.pop_front();
+		return front;
+	}
+	
+	T  getFrontElement() 
+	{
+		std::unique_lock<std::mutex> lock(mLock);
+		if (mQue.empty())
+		{
+			return nullptr;
+		}
+		return mQue.front();
+	}
+	
+	T& getBackElement() 
+	{
+		std::unique_lock<std::mutex> lock(mLock);
+		if (mQue.empty())
+		{
+			return nullptr;
+		}
+		return mQue.back();
+	}
+	
+	int getSize() 
+	{
+		std::unique_lock<std::mutex> lock(mLock);
+		return (int)mQue.size();
+	}
+	
+	void signalWakeUp() 
+	{
+		std::unique_lock<std::mutex> lock(mLock);
+		mCond.notify_all();
+	}
+
+	void clear() 
+	{
+		std::unique_lock<std::mutex> lock(mLock);
+		mQue.clear();
+	}
+private:
+	std::mutex					mLock;
+	std::condition_variable		mCond;
+	std::deque<T>				mQue;
+};
+
+
+#endif
