@@ -1,0 +1,76 @@
+#ifndef __QUEUE_CAS_H__
+#define __QUEUE_CAS_H__
+
+#include <atomic>
+
+template<typename T>
+class CQueueCas
+{
+public:
+	CQueueCas(const CQueueCas& copy) = delete;
+	CQueueCas& operator=(const CQueueCas& copy) = delete;
+	explicit CQueueCas() {
+		node* head = new node;
+		mHead.store(head);
+		mTail.store(head);
+	}
+	~CQueueCas() { clear(); }
+
+	int push(const T& item) 
+	{
+		node* newTail = new node;
+		node* bak = nullptr;
+		do 
+		{
+			bak = mTail.load();
+			bak->data = item;
+			bak->next = newTail;
+		} while (!mTail.compare_exchange_weak(bak, newTail));
+		return 0;
+	}
+
+	int pop(T* out) 
+	{
+		node* head = nullptr;
+		node* newHead = nullptr;
+		do 
+		{
+			head = mHead.load();
+			if (nullptr == head->next) 
+			{
+				return -1;
+			}
+			newHead = head->next;
+		} while (!mHead.compare_exchange_weak(head, newHead));
+		if (nullptr != out) 
+		{
+			*out = head->data;
+		}
+		delete head;
+		return 0;
+	}
+
+private:
+	struct node
+	{
+		T		data;
+		node*	next{ nullptr };
+		node() {}
+		node(const T& data) : data(data), next(nullptr) {}
+	};
+
+
+private:
+	void clear() 
+	{
+		while (-1 != pop(nullptr));
+		node* head = mHead.load();
+		delete head;
+	}
+
+private:
+	std::atomic<node*> mHead;
+	std::atomic<node*> mTail;
+};
+
+#endif
